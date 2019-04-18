@@ -43,6 +43,11 @@ class AppengineConfigurationProperties {
     String sshKnownHostsFilePath
     boolean sshTrustUnknownHosts
     GcloudReleaseTrack gcloudReleaseTrack
+    List<String> services
+    List<String> versions
+    List<String> omitServices
+    List<String> omitVersions
+    Long cachingIntervalSeconds
 
     void initialize(AppengineJobExecutor jobExecutor) {
       if (this.jsonPath) {
@@ -55,7 +60,7 @@ class AppengineConfigurationProperties {
         def metadataService = createMetadataService()
 
         try {
-          this.project = responseToString(metadataService.getProject())
+          this.project = this.project ?: responseToString(metadataService.getProject())
           this.serviceAccountEmail = responseToString(metadataService.getApplicationDefaultServiceAccountEmail())
         } catch (e) {
           throw new RuntimeException("Could not find application default credentials for App Engine.", e)

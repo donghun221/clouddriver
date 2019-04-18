@@ -20,7 +20,6 @@ import com.google.api.services.compute.model.InstanceGroupManagersSetInstanceTem
 import com.google.api.services.compute.model.RegionInstanceGroupManagersSetTemplateRequest
 import com.netflix.spinnaker.clouddriver.data.task.Task
 import com.netflix.spinnaker.clouddriver.data.task.TaskRepository
-import com.netflix.spinnaker.clouddriver.google.GoogleConfiguration
 import com.netflix.spinnaker.clouddriver.google.config.GoogleConfigurationProperties
 import com.netflix.spinnaker.clouddriver.google.deploy.GCEUtil
 import com.netflix.spinnaker.clouddriver.google.deploy.GoogleOperationPoller
@@ -31,6 +30,7 @@ import com.netflix.spinnaker.clouddriver.google.deploy.exception.GoogleResourceN
 import com.netflix.spinnaker.clouddriver.google.provider.view.GoogleClusterProvider
 import com.netflix.spinnaker.clouddriver.google.provider.view.GoogleNetworkProvider
 import com.netflix.spinnaker.clouddriver.google.provider.view.GoogleSubnetProvider
+import com.netflix.spinnaker.config.GoogleConfiguration
 import org.springframework.beans.factory.annotation.Autowired
 
 /**
@@ -126,13 +126,13 @@ class ModifyGoogleServerGroupInstanceTemplateAtomicOperation extends GoogleAtomi
         TAG_SCOPE, SCOPE_GLOBAL)
 
     // Create a description to represent the current instance template.
-    def originalDescription = GCEUtil.buildInstanceDescriptionFromTemplate(instanceTemplate)
+    def originalDescription = GCEUtil.buildInstanceDescriptionFromTemplate(project, instanceTemplate)
 
     // Collect the properties of the description passed to the operation.
     def properties = [:] + description.properties
 
     // Remove the properties we don't want to compare or override.
-    properties.keySet().removeAll(["class", "serverGroupName", "region", "accountName", "credentials"])
+    properties.keySet().removeAll(["class", "serverGroupName", "region", "accountName", "credentials", "applications"])
 
     // Collect all of the map entries with non-null values into a new map.
     def overriddenProperties = properties.findResults { key, value ->
@@ -143,7 +143,7 @@ class ModifyGoogleServerGroupInstanceTemplateAtomicOperation extends GoogleAtomi
     def newDescriptionProperties = [:] + originalDescription.properties + overriddenProperties
 
     // Remove the properties we don't want to compare or override.
-    newDescriptionProperties.keySet().removeAll(["class", "accountName", "credentials", "account"])
+    newDescriptionProperties.keySet().removeAll(["class", "accountName", "credentials", "account", "name"])
 
     // Resolve the auth scopes since the scopes returned on the existing instance template will be fully-resolved.
     newDescriptionProperties.authScopes = GCEUtil.resolveAuthScopes(newDescriptionProperties.authScopes)
@@ -167,6 +167,19 @@ class ModifyGoogleServerGroupInstanceTemplateAtomicOperation extends GoogleAtomi
 
         clonedDescription.disks = overriddenProperties.disks
 
+        clonedDescription.baseDeviceName = description.serverGroupName
+
+        def bootImage = GCEUtil.getBootImage(description,
+          task,
+          BASE_PHASE,
+          clouddriverUserAgentApplicationName,
+          googleConfigurationProperties.baseImageProjects,
+          safeRetry,
+          this)
+
+        // We include a subset of the image's attributes and a reference in the disks.
+        // Furthermore, we're using the underlying raw compute model classes
+        // so we can't simply change the representation to support what we need for shielded VMs.
         def attachedDisks = GCEUtil.buildAttachedDisks(clonedDescription,
                                                        null,
                                                        false,
@@ -175,6 +188,7 @@ class ModifyGoogleServerGroupInstanceTemplateAtomicOperation extends GoogleAtomi
                                                        BASE_PHASE,
                                                        clouddriverUserAgentApplicationName,
                                                        googleConfigurationProperties.baseImageProjects,
+                                                       bootImage,
                                                        safeRetry,
                                                        this)
 
@@ -202,6 +216,10 @@ class ModifyGoogleServerGroupInstanceTemplateAtomicOperation extends GoogleAtomi
       // Override the instance template's canIpForward property if it was specified.
       if (overriddenProperties.canIpForward) {
         instanceTemplateProperties.setCanIpForward(canIpForward)
+      }
+
+      if (overriddenProperties.shieldedVmConfig) {
+        instanceTemplateProperties.setShieldedVmConfig(description.shieldedVmConfig)
       }
 
       // Override the instance template's metadata if instanceMetadata was specified.

@@ -17,48 +17,101 @@
 package com.netflix.spinnaker.clouddriver.cloudfoundry.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonView;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.netflix.frigga.Names;
 import com.netflix.spinnaker.clouddriver.cloudfoundry.CloudFoundryCloudProvider;
 import com.netflix.spinnaker.clouddriver.model.Image;
 import com.netflix.spinnaker.clouddriver.model.ServerGroup;
 import com.netflix.spinnaker.clouddriver.names.NamerRegistry;
 import com.netflix.spinnaker.moniker.Moniker;
+import io.vavr.collection.HashMap;
+import lombok.Builder;
 import lombok.EqualsAndHashCode;
-import lombok.Getter;
-import lombok.RequiredArgsConstructor;
-import lombok.ToString;
+import lombok.Value;
+import lombok.experimental.Wither;
 
-import java.util.HashMap;
+import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 import static com.netflix.spinnaker.clouddriver.model.HealthState.*;
 import static java.util.Collections.*;
 
-@RequiredArgsConstructor
-@ToString
-@Getter
+@Value
 @EqualsAndHashCode(of = "id", callSuper = false)
-@JsonIgnoreProperties(ignoreUnknown = true)
+@Builder
+@JsonDeserialize(builder = CloudFoundryServerGroup.CloudFoundryServerGroupBuilder.class)
+@JsonInclude(JsonInclude.Include.NON_EMPTY)
+@JsonIgnoreProperties("loadBalancerNames")
 public class CloudFoundryServerGroup extends CloudFoundryModel implements ServerGroup {
-  private static final ObjectMapper mapper = new ObjectMapper();
+  private static final ObjectMapper IMAGE_MAPPER = new ObjectMapper();
 
-  private final String account;
-  private final String name;
-  private final String id;
-  private final Integer memory;
-  private final Set<CloudFoundryInstance> instances;
-  private final CloudFoundryDroplet droplet;
-  private final Integer diskQuota;
-  private final State state;
-  private final CloudFoundrySpace space;
-  private final Long createdTime;
-  private final List<CloudFoundryLoadBalancer> routes;
-  private final List<CloudFoundryServiceInstance> serviceInstances;
+  @JsonView(Views.Cache.class)
+  String account;
+
+  @JsonView(Views.Cache.class)
+  String appsManagerUri;
+
+  @JsonView(Views.Cache.class)
+  String metricsUri;
+
+  @JsonView(Views.Cache.class)
+  String name;
+
+  @JsonView(Views.Cache.class)
+  String id;
+
+  @JsonView(Views.Cache.class)
+  Integer memory;
+
+  @JsonView(Views.Cache.class)
+  @Nullable
+  CloudFoundryDroplet droplet;
+
+  @JsonView(Views.Cache.class)
+  Integer diskQuota;
+
+  @JsonView(Views.Cache.class)
+  @Nullable
+  private String healthCheckType;
+
+  @JsonView(Views.Cache.class)
+  @Nullable
+  private String healthCheckHttpEndpoint;
+
+  @JsonView(Views.Cache.class)
+  State state;
+
+  @JsonView(Views.Cache.class)
+  CloudFoundrySpace space;
+
+  @JsonView(Views.Cache.class)
+  Long createdTime;
+
+  @JsonView(Views.Cache.class)
+  Map<String, String> env;
+
+  @Wither
+  @JsonView(Views.Cache.class)
+  List<CloudFoundryServiceInstance> serviceInstances;
+
+  @Wither
+  @JsonView(Views.Relationship.class)
+  Set<CloudFoundryInstance> instances;
+
+  @Wither
+  @JsonView(Views.Relationship.class)
+  Set<String> loadBalancerNames;
+
+  @Override
+  public Set<String> getLoadBalancers() {
+    return loadBalancerNames == null ? emptySet() : loadBalancerNames;
+  }
 
   @Override
   public ImagesSummary getImagesSummary() {
@@ -84,7 +137,7 @@ public class CloudFoundryServerGroup extends CloudFoundryModel implements Server
 
             @Override
             public Map<String, Object> getImage() {
-              return mapper.convertValue(this, new TypeReference<Map>() {
+              return IMAGE_MAPPER.convertValue(this, new TypeReference<Map<String, Object>>() {
               });
             }
 
@@ -99,26 +152,32 @@ public class CloudFoundryServerGroup extends CloudFoundryModel implements Server
   }
 
   public Image getImage() {
-    return new CloudFoundryImage(droplet == null ? "unknown" : droplet.getId(), name + "-droplet", space.getRegion());
+    return CloudFoundryImage.builder()
+      .id(droplet == null ? "unknown" : droplet.getId())
+      .name(name + "-droplet")
+      .region(getRegion())
+      .build();
   }
 
   public Map getBuildInfo() {
-    Map<String, Object> buildInfo = new HashMap<>();
-    buildInfo.put("droplet", droplet);
-    buildInfo.put("serviceInstances", serviceInstances);
-    buildInfo.put("id", id);
-    return buildInfo;
+    return HashMap.<Object, Object>of(
+      "appsManagerUri", appsManagerUri,
+      "metricsUri", metricsUri,
+      "droplet", droplet,
+      "id", id,
+      "serviceInstances", serviceInstances)
+      .toJavaMap();
   }
 
   @Deprecated
   @Override
   public ImageSummary getImageSummary() {
-    return getImagesSummary() != null ? getImagesSummary().getSummaries().get(0) : null;
+    return getImagesSummary().getSummaries().get(0);
   }
 
   @Override
   public String getRegion() {
-    return space.getRegion();
+    return space == null ? "unknown" : space.getRegion();
   }
 
   @Override
@@ -128,12 +187,7 @@ public class CloudFoundryServerGroup extends CloudFoundryModel implements Server
 
   @Override
   public Set<String> getZones() {
-    return singleton(space.getName());
-  }
-
-  @Override
-  public Set<String> getLoadBalancers() {
-    return routes.stream().map(CloudFoundryLoadBalancer::getName).collect(Collectors.toSet());
+    return space == null ? emptySet() : singleton(space.getName());
   }
 
   @Override
@@ -171,6 +225,7 @@ public class CloudFoundryServerGroup extends CloudFoundryModel implements Server
     return Names.parseName(name).getDetail();
   }
 
+  @SuppressWarnings("unchecked")
   public Moniker getMoniker() {
     Moniker moniker = NamerRegistry.getDefaultNamer().deriveMoniker(this);
     return new Moniker(moniker.getApp(), moniker.getCluster(), moniker.getDetail(), moniker.getStack(),
@@ -182,7 +237,7 @@ public class CloudFoundryServerGroup extends CloudFoundryModel implements Server
     return CloudFoundryCloudProvider.ID;
   }
 
-  enum State {
+  public enum State {
     STOPPED,
     STARTED
   }

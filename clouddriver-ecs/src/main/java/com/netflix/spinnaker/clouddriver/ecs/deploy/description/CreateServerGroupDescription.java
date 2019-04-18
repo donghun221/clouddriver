@@ -32,19 +32,49 @@ public class CreateServerGroupDescription extends AbstractECSDescription {
   String iamRole;
   Integer containerPort;
   String targetGroup;
-  List<String> securityGroups;
+  List<String> securityGroupNames;
 
   String portProtocol;
 
   Integer computeUnits;
   Integer reservedMemory;
 
+  Map<String, String> environmentVariables;
+
   String dockerImageAddress;
+  String dockerImageCredentialsSecret;
 
   ServerGroup.Capacity capacity;
 
   Map<String, List<String>> availabilityZones;
 
-  List<MetricAlarm> autoscalingPolicies;
+  boolean copySourceScalingPoliciesAndActions = true;
+  Source source = new Source();
+
   List<PlacementStrategy> placementStrategySequence;
+  String networkMode;
+  String subnetType;
+  Boolean associatePublicIpAddress;
+  Integer healthCheckGracePeriodSeconds;
+
+  String launchType;
+
+  String logDriver;
+  Map<String, String> logOptions;
+  Map<String, String> dockerLabels;
+
+  @Override
+  public String getRegion() {
+    //CreateServerGroupDescription does not contain a region. Instead it has AvailabilityZones
+    return getAvailabilityZones().keySet().iterator().next();
+  }
+
+  @Data
+  @EqualsAndHashCode(callSuper = false)
+  public static class Source {
+    String account;
+    String region;
+    String asgName;
+    Boolean useSourceCapacity;
+  }
 }

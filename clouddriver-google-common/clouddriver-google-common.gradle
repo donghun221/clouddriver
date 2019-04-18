@@ -1,4 +1,7 @@
 dependencies {
-  compile project(":clouddriver-core")
-  spinnaker.group('google')
+  spinnaker.group('fiat')
+
+  compile spinnaker.dependency('googleApiClient')
+  compile spinnaker.dependency('lombok')
+  compile spinnaker.dependency('spectatorApi')
 }

@@ -22,6 +22,8 @@ import com.netflix.spinnaker.clouddriver.kubernetes.v2.caching.agent.KubernetesC
 import com.netflix.spinnaker.clouddriver.kubernetes.v2.caching.agent.KubernetesCoreCachingAgent;
 import com.netflix.spinnaker.clouddriver.kubernetes.v2.caching.agent.KubernetesV2CachingAgent;
 import com.netflix.spinnaker.clouddriver.kubernetes.v2.caching.view.provider.KubernetesCacheUtils;
+import com.netflix.spinnaker.clouddriver.kubernetes.v2.description.JsonPatch;
+import com.netflix.spinnaker.clouddriver.kubernetes.v2.description.JsonPatch.Op;
 import com.netflix.spinnaker.clouddriver.kubernetes.v2.description.KubernetesSpinnakerKindMap.SpinnakerKind;
 import com.netflix.spinnaker.clouddriver.kubernetes.v2.description.manifest.KubernetesKind;
 import com.netflix.spinnaker.clouddriver.kubernetes.v2.description.manifest.KubernetesManifest;
@@ -35,14 +37,16 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
+import static com.netflix.spinnaker.clouddriver.kubernetes.v2.description.JsonPatch.Op.remove;
 import static com.netflix.spinnaker.clouddriver.kubernetes.v2.description.manifest.KubernetesApiVersion.V1;
 import static com.netflix.spinnaker.clouddriver.kubernetes.v2.description.manifest.KubernetesKind.REPLICA_SET;
 import static com.netflix.spinnaker.clouddriver.kubernetes.v2.description.manifest.KubernetesKind.SERVICE;
 import static com.netflix.spinnaker.clouddriver.kubernetes.v2.op.handler.KubernetesHandler.DeployPriority.NETWORK_RESOURCE_PRIORITY;
 
 @Component
-public class KubernetesServiceHandler extends KubernetesHandler {
+public class KubernetesServiceHandler extends KubernetesHandler implements CanLoadBalance {
   @Override
   public int deployPriority() {
     return NETWORK_RESOURCE_PRIORITY.getValue();
@@ -156,5 +160,53 @@ public class KubernetesServiceHandler extends KubernetesHandler {
   private String podLabelKey(String namespace, Map.Entry<String, String> label) {
     // Space can't be used in any of the values, so it's a safe separator.
     return namespace + " " + label.getKey() + " " + label.getValue();
+  }
+
+  @Override
+  public void attach(KubernetesManifest loadBalancer, KubernetesManifest target) {
+    Map<String, String> labels = target.getSpecTemplateLabels().orElse(target.getLabels());
+    Map<String, String> selector = getSelector(loadBalancer);
+    labels.putAll(selector);
+  }
+
+  private String pathPrefix(KubernetesManifest target) {
+    if (target.getSpecTemplateLabels().isPresent()) {
+      return "/spec/template/metadata/labels";
+    } else {
+      return "/metadata/labels";
+    }
+  }
+
+  private Map<String, String> labels(KubernetesManifest target) {
+    if (target.getSpecTemplateLabels().isPresent()) {
+      return target.getSpecTemplateLabels().get();
+    } else {
+      return target.getLabels();
+    }
+  }
+
+  @Override
+  public List<JsonPatch> attachPatch(KubernetesManifest loadBalancer, KubernetesManifest target) {
+    String pathPrefix = pathPrefix(target);
+    Map<String, String> labels = labels(target);
+
+    return getSelector(loadBalancer).entrySet().stream()
+        .map(kv -> JsonPatch.builder()
+            .op(labels.containsKey(kv.getKey()) ? Op.replace : Op.add)
+            .path(String.join("/", pathPrefix, kv.getKey()))
+            .value(kv.getValue())
+            .build())
+        .collect(Collectors.toList());
+  }
+
+  @Override
+  public List<JsonPatch> detachPatch(KubernetesManifest loadBalancer, KubernetesManifest target) {
+    String pathPrefix = pathPrefix(target);
+    Map<String, String> labels = labels(target);
+
+    return getSelector(loadBalancer).keySet().stream()
+        .filter(labels::containsKey)
+        .map(k -> JsonPatch.builder().op(remove).path(String.join("/", pathPrefix, k)).build())
+        .collect(Collectors.toList());
   }
 }

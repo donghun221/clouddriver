@@ -21,18 +21,17 @@ import com.netflix.spinnaker.clouddriver.openstack.model.OpenstackImage
 import org.openstack4j.api.exceptions.ServerResponseException
 import org.openstack4j.api.image.v2.ImageService
 import org.openstack4j.model.image.v2.Image
+import org.openstack4j.openstack.image.v2.domain.GlanceImage
 import org.springframework.http.HttpStatus
 
-class OpenstackImageV1ClientProviderSpec extends OpenstackClientProviderSpec {
+class OpenstackImageV2ClientProviderSpec extends OpenstackClientProviderSpec {
 
   def "list images succeeds"() {
     setup:
     Map<String, String> filters = null
     ImageService imageService = Mock(ImageService)
-    def imageLocation = "http://example.com/image.iso"
-    Image image = Mock(Image) {
-      getLocations() >> [imageLocation]
-    }
+    GlanceImage.Location imageLocation = new GlanceImage.Location(url: "http://example.com/image.iso")
+    GlanceImage image = new GlanceImage(directUrl: "http://example.com/image.iso", locations: [imageLocation])
 
     when:
     List<OpenstackImage> result = provider.listImages(region, filters)
@@ -43,7 +42,7 @@ class OpenstackImageV1ClientProviderSpec extends OpenstackClientProviderSpec {
 
     and:
     result[0] instanceof OpenstackImage
-    result[0].location == imageLocation
+    result[0].location == "http://example.com/image.iso"
     noExceptionThrown()
   }
 

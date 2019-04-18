@@ -18,11 +18,11 @@ package com.netflix.spinnaker.clouddriver
 
 import com.netflix.spectator.api.Registry
 import com.netflix.spinnaker.clouddriver.configuration.CredentialsConfiguration
-import com.netflix.spinnaker.clouddriver.configuration.ThreadPoolConfiguration
 
 import com.netflix.spinnaker.clouddriver.requestqueue.RequestQueue
 import com.netflix.spinnaker.clouddriver.requestqueue.RequestQueueConfiguration
 import com.netflix.spinnaker.filters.AuthenticatedRequestFilter
+import com.netflix.spinnaker.kork.dynamicconfig.DynamicConfigService
 import com.netflix.spinnaker.kork.web.interceptors.MetricsInterceptor
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.context.properties.EnableConfigurationProperties
@@ -49,7 +49,7 @@ import javax.servlet.http.HttpServletResponse
   'com.netflix.spinnaker.clouddriver.listeners',
   'com.netflix.spinnaker.clouddriver.security',
 ])
-@EnableConfigurationProperties([CredentialsConfiguration, ThreadPoolConfiguration, RequestQueueConfiguration])
+@EnableConfigurationProperties([CredentialsConfiguration, RequestQueueConfiguration])
 public class WebConfig extends WebMvcConfigurerAdapter {
   @Autowired
   Registry registry
@@ -69,8 +69,10 @@ public class WebConfig extends WebMvcConfigurerAdapter {
   }
 
   @Bean
-  RequestQueue requestQueue(RequestQueueConfiguration requestQueueConfiguration, Registry registry) {
-    return RequestQueue.forConfig(registry, requestQueueConfiguration);
+  RequestQueue requestQueue(DynamicConfigService dynamicConfigService,
+                            RequestQueueConfiguration requestQueueConfiguration,
+                            Registry registry) {
+    return RequestQueue.forConfig(dynamicConfigService, registry, requestQueueConfiguration);
   }
 
   @Bean

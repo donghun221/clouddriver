@@ -16,12 +16,16 @@
 
 package com.netflix.spinnaker.clouddriver.cloudfoundry.client;
 
-import lombok.RequiredArgsConstructor;
+public interface CloudFoundryClient {
+  Spaces getSpaces();
 
-@RequiredArgsConstructor
-public class CloudFoundryClient {
-  private final String account;
-  private final String apiHost;
-  private final String user;
-  private final String password;
+  Organizations getOrganizations();
+
+  Domains getDomains();
+
+  Routes getRoutes();
+
+  Applications getApplications();
+
+  ServiceInstances getServiceInstances();
 }

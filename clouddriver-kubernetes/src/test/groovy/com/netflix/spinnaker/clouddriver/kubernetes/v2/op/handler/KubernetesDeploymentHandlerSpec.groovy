@@ -18,15 +18,16 @@
 package com.netflix.spinnaker.clouddriver.kubernetes.v2.op.handler
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.netflix.spinnaker.clouddriver.kubernetes.v2.artifact.ArtifactTypes
+import com.netflix.spinnaker.clouddriver.artifacts.kubernetes.KubernetesArtifactType
 import com.netflix.spinnaker.clouddriver.kubernetes.v2.description.manifest.KubernetesManifest
 import com.netflix.spinnaker.kork.artifacts.model.Artifact
 import org.yaml.snakeyaml.Yaml
+import org.yaml.snakeyaml.constructor.SafeConstructor
 import spock.lang.Specification
 
 class KubernetesDeploymentHandlerSpec extends Specification {
   def objectMapper = new ObjectMapper()
-  def yaml = new Yaml()
+  def yaml = new Yaml(new SafeConstructor())
   def handler = new KubernetesDeploymentHandler()
 
   def IMAGE = "gcr.io/project/image"
@@ -79,7 +80,7 @@ spec:
     when:
     def target = "$IMAGE:version-1.2.3"
     def artifact = Artifact.builder()
-        .type(ArtifactTypes.DOCKER_IMAGE.toString())
+        .type(KubernetesArtifactType.DockerImage.type)
         .name(IMAGE)
         .reference(target)
         .build()
@@ -96,7 +97,7 @@ spec:
     when:
     def target = "$IMAGE:version-bad"
     def artifact = Artifact.builder()
-        .type(ArtifactTypes.DOCKER_IMAGE.toString())
+        .type(KubernetesArtifactType.DockerImage.type)
         .name("not-$IMAGE")
         .reference(target)
         .build()
@@ -113,14 +114,14 @@ spec:
     def result = handler.listArtifacts(stringToManifest(BASIC_DEPLOYMENT))
 
     then:
-    result.findAll { a -> a.getReference() == IMAGE && a.getType() == ArtifactTypes.DOCKER_IMAGE.toString() }.size() == 1
+    result.findAll { a -> a.getReference() == IMAGE && a.getType() == KubernetesArtifactType.DockerImage.type }.size() == 1
   }
 
   void "check that configmap volume is replaced by the artifact replacer without an account specified"() {
     when:
     def target = "$CONFIG_MAP_VOLUME-version-1.2.3"
     def artifact = Artifact.builder()
-        .type(ArtifactTypes.KUBERNETES_CONFIG_MAP.toString())
+        .type(KubernetesArtifactType.ConfigMap.type)
         .name(CONFIG_MAP_VOLUME)
         .reference(target)
         .build()
@@ -135,7 +136,7 @@ spec:
     when:
     def target = "$CONFIG_MAP_VOLUME-version-1.2.3"
     def artifact = Artifact.builder()
-        .type(ArtifactTypes.KUBERNETES_CONFIG_MAP.toString())
+        .type(KubernetesArtifactType.ConfigMap.type)
         .name(CONFIG_MAP_VOLUME)
         .reference(target)
         .metadata(["account": ACCOUNT])
@@ -151,7 +152,7 @@ spec:
     when:
     def target = "$CONFIG_MAP_VOLUME:version-bad"
     def artifact = Artifact.builder()
-        .type(ArtifactTypes.KUBERNETES_CONFIG_MAP.toString())
+        .type(KubernetesArtifactType.ConfigMap.type)
         .name("not-$CONFIG_MAP_VOLUME")
         .reference(target)
         .build()
@@ -166,7 +167,7 @@ spec:
     when:
     def target = "$CONFIG_MAP_VOLUME:version-1.2.3"
     def artifact = Artifact.builder()
-        .type(ArtifactTypes.KUBERNETES_CONFIG_MAP.toString())
+        .type(KubernetesArtifactType.ConfigMap.type)
         .name("$CONFIG_MAP_VOLUME")
         .reference(target)
         .metadata(["account": "not-$ACCOUNT".toString()])
@@ -183,7 +184,7 @@ spec:
     def result = handler.listArtifacts(stringToManifest(BASIC_DEPLOYMENT))
 
     then:
-    result.findAll { a -> a.getReference() == CONFIG_MAP_VOLUME && a.getType() == ArtifactTypes.KUBERNETES_CONFIG_MAP.toString()}.size() == 1
+    result.findAll { a -> a.getReference() == CONFIG_MAP_VOLUME && a.getType() == KubernetesArtifactType.ConfigMap.type}.size() == 1
   }
 
 
@@ -191,7 +192,7 @@ spec:
     when:
     def target = "$SECRET_ENV-version-1.2.3"
     def artifact = Artifact.builder()
-        .type(ArtifactTypes.KUBERNETES_SECRET.toString())
+        .type(KubernetesArtifactType.Secret.type)
         .name(SECRET_ENV)
         .reference(target)
         .metadata(["account": ACCOUNT])
@@ -207,7 +208,7 @@ spec:
     when:
     def target = "$SECRET_ENV:version-bad"
     def artifact = Artifact.builder()
-        .type(ArtifactTypes.KUBERNETES_SECRET.toString())
+        .type(KubernetesArtifactType.Secret.type)
         .name("not-$SECRET_ENV")
         .reference(target)
         .build()
@@ -223,14 +224,14 @@ spec:
     def result = handler.listArtifacts(stringToManifest(BASIC_DEPLOYMENT))
 
     then:
-    result.findAll { a -> a.getReference() == SECRET_ENV && a.getType() == ArtifactTypes.KUBERNETES_SECRET.toString()}.size() == 1
+    result.findAll { a -> a.getReference() == SECRET_ENV && a.getType() == KubernetesArtifactType.Secret.type}.size() == 1
   }
 
   void "check that only configmap value ref is replaced by the artifact replacer"() {
     when:
     def target = "$CONFIG_MAP_ENV_KEY-version-1.2.3"
     def artifact = Artifact.builder()
-        .type(ArtifactTypes.KUBERNETES_CONFIG_MAP.toString())
+        .type(KubernetesArtifactType.ConfigMap.type)
         .name(CONFIG_MAP_ENV_KEY)
         .reference(target)
         .build()
@@ -245,7 +246,7 @@ spec:
     when:
     def target = "$CONFIG_MAP_ENV_KEY:version-bad"
     def artifact = Artifact.builder()
-        .type(ArtifactTypes.KUBERNETES_CONFIG_MAP.toString())
+        .type(KubernetesArtifactType.ConfigMap.type)
         .name("not-$CONFIG_MAP_ENV_KEY")
         .reference(target)
         .build()
@@ -261,6 +262,6 @@ spec:
     def result = handler.listArtifacts(stringToManifest(BASIC_DEPLOYMENT))
 
     then:
-    result.findAll { a -> a.getReference() == CONFIG_MAP_ENV_KEY && a.getType() == ArtifactTypes.KUBERNETES_CONFIG_MAP.toString()}.size() == 1
+    result.findAll { a -> a.getReference() == CONFIG_MAP_ENV_KEY && a.getType() == KubernetesArtifactType.ConfigMap.type}.size() == 1
   }
 }

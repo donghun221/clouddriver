@@ -75,7 +75,7 @@ class CopyLastGoogleServerGroupAtomicOperation extends GoogleAtomicOperation<Dep
     def isRegional = newDescription.regional
     def zone = newDescription.zone
     def region = newDescription.region ?: credentials.regionFromZone(zone)
-    def serverGroupNameResolver = new GCEServerGroupNameResolver(project, region, credentials, safeRetry, this)
+    def serverGroupNameResolver = new GCEServerGroupNameResolver(project, region, credentials, googleClusterProvider, safeRetry, this)
     def clusterName = serverGroupNameResolver.combineAppStackDetail(newDescription.application, newDescription.stack, newDescription.freeFormDetails)
 
     task.updateStatus BASE_PHASE, "Initializing copy of server group for cluster $clusterName in ${isRegional ? region : zone}..."
@@ -159,7 +159,9 @@ class CopyLastGoogleServerGroupAtomicOperation extends GoogleAtomicOperation<Dep
 
           new GoogleDisk(type: initializeParams.diskType,
                          sizeGb: initializeParams.diskSizeGb,
-                         autoDelete: attachedDisk.autoDelete)
+                         autoDelete: attachedDisk.autoDelete,
+                         sourceImage: GCEUtil.getLocalName(initializeParams.sourceImage)
+          )
         }
       }
 
@@ -243,6 +245,25 @@ class CopyLastGoogleServerGroupAtomicOperation extends GoogleAtomicOperation<Dep
           description.canIpForward != null
           ? description.canIpForward
           : ancestorInstanceProperties.canIpForward
+
+      def shieldedVmConfig = ancestorInstanceProperties.shieldedVmConfig
+
+      if (shieldedVmConfig) {
+        newDescription.enableSecureBoot =
+          description.enableSecureBoot != null
+            ? description.enableSecureBoot
+            : shieldedVmConfig.enableSecureBoot
+
+        newDescription.enableVtpm =
+          description.enableVtpm != null
+            ? description.enableVtpm
+            : shieldedVmConfig.enableVtpm
+
+        newDescription.enableIntegrityMonitoring =
+          description.enableIntegrityMonitoring != null
+            ? description.enableIntegrityMonitoring
+            : shieldedVmConfig.enableIntegrityMonitoring
+      }
     }
 
     AutoscalingPolicy ancestorAutoscalingPolicy = ancestorServerGroup.autoscalingPolicy
@@ -255,7 +276,8 @@ class CopyLastGoogleServerGroupAtomicOperation extends GoogleAtomicOperation<Dep
     GoogleAutoHealingPolicy ancestorAutoHealingPolicyDescription =
       GCEUtil.buildAutoHealingPolicyDescriptionFromAutoHealingPolicy(ancestorAutoHealingPolicy)
 
-    newDescription.autoHealingPolicy = description.autoHealingPolicy ?: ancestorAutoHealingPolicyDescription
+    newDescription.autoHealingPolicy = (description.autoHealingPolicy != null || description.overwriteAncestorAutoHealingPolicy) ?
+      description.autoHealingPolicy : ancestorAutoHealingPolicyDescription
 
     return newDescription
   }

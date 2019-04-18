@@ -16,7 +16,7 @@
 
 package com.netflix.spinnaker.clouddriver.titus.deploy.handlers
 
-import com.netflix.spinnaker.clouddriver.aws.AwsConfiguration
+import com.netflix.frigga.Names
 import com.netflix.spinnaker.clouddriver.aws.deploy.ops.loadbalancer.TargetGroupLookupHelper
 import com.netflix.spinnaker.clouddriver.aws.deploy.ops.loadbalancer.TargetGroupLookupHelper.TargetGroupLookupResult
 import com.netflix.spinnaker.clouddriver.aws.services.RegionScopedProviderFactory
@@ -45,6 +45,7 @@ import com.netflix.spinnaker.clouddriver.titus.deploy.description.TitusDeployDes
 import com.netflix.spinnaker.clouddriver.titus.deploy.description.TitusDeployDescription.Source
 import com.netflix.spinnaker.clouddriver.titus.deploy.description.UpsertTitusScalingPolicyDescription
 import com.netflix.spinnaker.clouddriver.titus.model.DockerImage
+import com.netflix.spinnaker.config.AwsConfiguration
 import com.netflix.spinnaker.kork.core.RetrySupport
 import com.netflix.titus.grpc.protogen.PutPolicyRequest
 import com.netflix.titus.grpc.protogen.PutPolicyRequest.Builder
@@ -100,7 +101,7 @@ class TitusDeployHandler implements DeployHandler<TitusDeployDescription> {
   TitusDeploymentResult handle(TitusDeployDescription description, List priorOutputs) {
 
     try {
-      task.updateStatus BASE_PHASE, "Initializing handler..."
+      task.updateStatus BASE_PHASE, "Initializing handler... ${System.currentTimeMillis()}"
       TitusClient titusClient = titusClientProvider.getTitusClient(description.credentials, description.region)
       TitusDeploymentResult deploymentResult = new TitusDeploymentResult()
       String account = description.account
@@ -112,6 +113,15 @@ class TitusDeployHandler implements DeployHandler<TitusDeployDescription> {
       if (!description.labels) description.labels = [:]
 
       if (description.source.asgName) {
+        task.updateStatus BASE_PHASE, "Getting Source ASG Name Details... ${System.currentTimeMillis()}"
+
+
+        // If cluster name info was not provided, use the fields from the source asg
+        def sourceName = Names.parseName(description.source.asgName)
+        description.application = description.application != null ? description.application : sourceName.app
+        description.stack = description.stack != null ? description.stack : sourceName.stack
+        description.freeFormDetails = description.freeFormDetails != null ? description.freeFormDetails : sourceName.detail
+
         Source source = description.source
 
         TitusClient sourceClient = buildSourceTitusClient(source)
@@ -162,7 +172,10 @@ class TitusDeployHandler implements DeployHandler<TitusDeployDescription> {
         if (description.inService == null) {
           description.inService = sourceJob.inService
         }
-        description.migrationPolicy = description.migrationPolicy ?: sourceJob.migrationPolicy
+        if (description.disruptionBudget == null) {
+          //migrationPolicy should only be used when the disruptionBudget has not been specified
+          description.migrationPolicy = description.migrationPolicy ?: sourceJob.migrationPolicy
+        }
         description.jobType = description.jobType ?: "service"
         if (!description.hardConstraints) description.hardConstraints = []
         if (!description.softConstraints) description.softConstraints = []
@@ -183,6 +196,9 @@ class TitusDeployHandler implements DeployHandler<TitusDeployDescription> {
         if (sourceJob.labels?.get(USE_APPLICATION_DEFAULT_SG_LABEL) == "false") {
           description.useApplicationDefaultSecurityGroup = false
         }
+
+        task.updateStatus BASE_PHASE, "Finished Getting Source ASG Name Details... ${System.currentTimeMillis()}"
+
       }
 
       task.updateStatus BASE_PHASE, "Preparing deployment to ${account}:${region}${subnet ? ':' + subnet : ''}... ${System.currentTimeMillis()}"
@@ -235,6 +251,7 @@ class TitusDeployHandler implements DeployHandler<TitusDeployDescription> {
         .withMigrationPolicy(description.migrationPolicy)
         .withCredentials(description.credentials.name)
         .withContainerAttributes(description.containerAttributes.collectEntries { [(it.key): it.value?.toString()] })
+        .withDisruptionBudget(description.disruptionBudget)
 
       if (dockerImage.imageDigest != null) {
         submitJobRequest = submitJobRequest.withDockerDigest(dockerImage.imageDigest)
@@ -242,11 +259,15 @@ class TitusDeployHandler implements DeployHandler<TitusDeployDescription> {
         submitJobRequest = submitJobRequest.withDockerImageVersion(dockerImage.imageVersion)
       }
 
+      task.updateStatus BASE_PHASE, "Resolving Security Groups... ${System.currentTimeMillis()}"
+
       Set<String> securityGroups = []
       description.securityGroups?.each { providedSecurityGroup ->
+        task.updateStatus BASE_PHASE, "Resolving Security Group ${providedSecurityGroup}... ${System.currentTimeMillis()}"
         if (awsLookupUtil.securityGroupIdExists(account, region, providedSecurityGroup)) {
           securityGroups << providedSecurityGroup
         } else {
+          task.updateStatus BASE_PHASE, "Resolving Security Group name ${providedSecurityGroup}... ${System.currentTimeMillis()}"
           String convertedSecurityGroup = awsLookupUtil.convertSecurityGroupNameToId(account, region, providedSecurityGroup)
           if (!convertedSecurityGroup) {
             throw new RuntimeException("Security Group ${providedSecurityGroup} cannot be found")
@@ -255,7 +276,9 @@ class TitusDeployHandler implements DeployHandler<TitusDeployDescription> {
         }
       }
 
-      if (description.jobType != 'batch' && deployDefaults.addAppGroupToServerGroup && securityGroups.size() < deployDefaults.maxSecurityGroups && description.useApplicationDefaultSecurityGroup != false) {
+      task.updateStatus BASE_PHASE, "Finished resolving Security Groups... ${System.currentTimeMillis()}"
+
+      if (description.jobType == 'service' && deployDefaults.addAppGroupToServerGroup && securityGroups.size() < deployDefaults.maxSecurityGroups && description.useApplicationDefaultSecurityGroup != false) {
         String applicationSecurityGroup = awsLookupUtil.convertSecurityGroupNameToId(account, region, description.application)
         if (!applicationSecurityGroup) {
           applicationSecurityGroup = OperationPoller.retryWithBackoff({ o -> awsLookupUtil.createSecurityGroupForApplication(account, region, description.application) }, 1000, 5)
@@ -285,6 +308,8 @@ class TitusDeployHandler implements DeployHandler<TitusDeployDescription> {
         submitJobRequest.withSecurityGroups(securityGroups.asList())
       }
 
+      task.updateStatus BASE_PHASE, "Setting user email... ${System.currentTimeMillis()}"
+
       Map front50Application
 
       try {
@@ -305,6 +330,8 @@ class TitusDeployHandler implements DeployHandler<TitusDeployDescription> {
         submitJobRequest.withJobType(description.jobType)
       }
 
+      task.updateStatus BASE_PHASE, "Resolving target groups... ${System.currentTimeMillis()}"
+
       TargetGroupLookupResult targetGroupLookupResult
 
       if (description.targetGroups) {
@@ -316,6 +343,8 @@ class TitusDeployHandler implements DeployHandler<TitusDeployDescription> {
         }
       }
 
+      task.updateStatus BASE_PHASE, "Resolving job name... ${System.currentTimeMillis()}"
+
       String nextServerGroupName = resolveJobName(description, submitJobRequest, task, titusClient)
       String jobUri
       int retryCount = 0
@@ -326,20 +355,25 @@ class TitusDeployHandler implements DeployHandler<TitusDeployDescription> {
           jobUri = titusClient.submitJob(submitJobRequest)
         } catch (io.grpc.StatusRuntimeException e) {
           task.updateStatus BASE_PHASE, "Error encountered submitting job request to Titus ${e.message} for ${nextServerGroupName} ${System.currentTimeMillis()}"
-          if ((e.status.code == Status.RESOURCE_EXHAUSTED.code || e.status.code == Status.INVALID_ARGUMENT.code) && (e.status.description.contains("Job sequence id reserved by another pending job") || e.status.description.contains("Constraint violation - job with group sequence"))) {
+          if (description.jobType == 'service' && (e.status.code == Status.RESOURCE_EXHAUSTED.code || e.status.code == Status.INVALID_ARGUMENT.code) && (e.status.description.contains("Job sequence id reserved by another pending job") || e.status.description.contains("Constraint violation - job with group sequence"))) {
             if (e.status.description.contains("Job sequence id reserved by another pending job")) {
-              sleep 1000 ^ pow(2, retryCount)
+              sleep 1000 ^ Math.pow(2, retryCount)
               retryCount++
             }
             nextServerGroupName = resolveJobName(description, submitJobRequest, task, titusClient)
-            task.updateStatus BASE_PHASE, "Retrying with ${nextServerGroupName} after ${tries} attempts ${System.currentTimeMillis()}"
-            throw e;
+            task.updateStatus BASE_PHASE, "Retrying with ${nextServerGroupName} after ${retryCount} attempts ${System.currentTimeMillis()}"
+            throw e
           }
-          if (e.status.code == Status.UNAVAILABLE.code) {
-            throw e;
+          if (e.status.code == Status.UNAVAILABLE.code ||
+              e.status.code == Status.INTERNAL.code ||
+              e.status.code == Status.DEADLINE_EXCEEDED.code) {
+            retryCount++
+            task.updateStatus BASE_PHASE, "Retrying after ${retryCount} attempts ${System.currentTimeMillis()}"
+            throw e
           } else {
             log.error("Could not submit job and not retrying for status ${e.status} ", e)
             task.updateStatus BASE_PHASE, "could not submit job ${e.status} ${e.message} ${System.currentTimeMillis()}"
+            throw e
           }
         }
       }, 8, 100, true)
@@ -360,11 +394,10 @@ class TitusDeployHandler implements DeployHandler<TitusDeployDescription> {
           deployedNamesByLocation: [(description.region): [jobUri]],
           jobUri                 : jobUri
         ])
+      } else {
+        copyScalingPolicies(description, jobUri, nextServerGroupName)
+        addLoadBalancers(description, targetGroupLookupResult, jobUri)
       }
-
-      copyScalingPolicies(description, jobUri, nextServerGroupName)
-
-      addLoadBalancers(description, targetGroupLookupResult, jobUri)
 
       deploymentResult.messages = task.history.collect { "${it.phase} : ${it.status}".toString() }
 
@@ -382,8 +415,17 @@ class TitusDeployHandler implements DeployHandler<TitusDeployDescription> {
   }
 
   private String resolveJobName(TitusDeployDescription description, SubmitJobRequest submitJobRequest, Task task, TitusClient titusClient) {
+    if(submitJobRequest.getJobType() == 'batch'){
+      submitJobRequest.withJobName(description.application)
+      return description.application
+    }
+    String nextServerGroupName
     TitusServerGroupNameResolver serverGroupNameResolver = new TitusServerGroupNameResolver(titusClient, description.region)
-    String nextServerGroupName = serverGroupNameResolver.resolveNextServerGroupName(description.application, description.stack, description.freeFormDetails, false)
+    if (description.sequence != null) {
+      nextServerGroupName = serverGroupNameResolver.generateServerGroupName(description.application, description.stack, description.freeFormDetails, description.sequence, false)
+    } else {
+      nextServerGroupName = serverGroupNameResolver.resolveNextServerGroupName(description.application, description.stack, description.freeFormDetails, false)
+    }
     submitJobRequest.withJobName(nextServerGroupName)
     task.updateStatus BASE_PHASE, "Resolved server group name to ${nextServerGroupName} ${System.currentTimeMillis()}"
     return nextServerGroupName
@@ -414,7 +456,7 @@ class TitusDeployHandler implements DeployHandler<TitusDeployDescription> {
   }
 
   protected void copyScalingPolicies(TitusDeployDescription description, String jobUri, String serverGroupName) {
-    if (!description.copySourceScalingPolicies) {
+    if (!description.copySourceScalingPolicies || !description.copySourceScalingPoliciesAndActions) {
       return
     }
     Source source = description.source

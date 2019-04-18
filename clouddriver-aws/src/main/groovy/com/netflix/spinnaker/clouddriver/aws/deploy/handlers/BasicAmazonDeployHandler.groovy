@@ -23,8 +23,8 @@ import com.amazonaws.services.ec2.model.DescribeSecurityGroupsRequest
 import com.google.common.annotations.VisibleForTesting
 import com.netflix.frigga.Names
 import com.netflix.spinnaker.clouddriver.aws.AmazonCloudProvider
-import com.netflix.spinnaker.clouddriver.aws.AwsConfiguration
-import com.netflix.spinnaker.clouddriver.aws.AwsConfiguration.DeployDefaults
+import com.netflix.spinnaker.config.AwsConfiguration
+import com.netflix.spinnaker.config.AwsConfiguration.DeployDefaults
 import com.netflix.spinnaker.clouddriver.aws.deploy.AmiIdResolver
 import com.netflix.spinnaker.clouddriver.aws.deploy.AutoScalingWorker
 import com.netflix.spinnaker.clouddriver.aws.deploy.BlockDeviceConfig
@@ -100,9 +100,10 @@ class BasicAmazonDeployHandler implements DeployHandler<BasicAmazonDeployDescrip
 
   @Override
   DeploymentResult handle(BasicAmazonDeployDescription description, List priorOutputs) {
-    task.updateStatus BASE_PHASE, "Initializing handler..."
     def deploymentResult = new DeploymentResult()
+
     task.updateStatus BASE_PHASE, "Preparing deployment to ${description.availabilityZones}..."
+
     for (Map.Entry<String, List<String>> entry : description.availabilityZones) {
       String region = entry.key
 
@@ -230,7 +231,7 @@ class BasicAmazonDeployHandler implements DeployHandler<BasicAmazonDeployDescrip
         description.blockDevices = blockDeviceConfig.getBlockDevicesForInstanceType(description.instanceType)
       }
       ResolvedAmiResult ami = priorOutputs.find({
-        it instanceof ResolvedAmiResult && it.region == region && it.amiName == description.amiName
+        it instanceof ResolvedAmiResult && it.region == region && (it.amiName == description.amiName || it.amiId == description.amiName)
       }) ?: AmiIdResolver.resolveAmiIdFromAllSources(amazonEC2, region, description.amiName, description.credentials.accountId)
 
       if (!ami) {
@@ -251,6 +252,12 @@ class BasicAmazonDeployHandler implements DeployHandler<BasicAmazonDeployDescrip
         description.spotPrice = null
       }
 
+      def capacity = new DeploymentResult.Deployment.Capacity(
+          min: description.capacity.min ?: 0,
+          max: description.capacity.max ?: 0,
+          desired: description.capacity.desired ?: 0
+      )
+
       def autoScalingWorker = new AutoScalingWorker(
         application: description.application,
         region: region,
@@ -260,9 +267,9 @@ class BasicAmazonDeployHandler implements DeployHandler<BasicAmazonDeployDescrip
         ami: ami.amiId,
         classicLinkVpcId: classicLinkVpcId,
         classicLinkVpcSecurityGroups: classicLinkVpcSecurityGroups,
-        minInstances: description.capacity.min != null ? description.capacity.min : 0,
-        maxInstances: description.capacity.max != null ? description.capacity.max : 0,
-        desiredInstances: description.capacity.desired != null ? description.capacity.desired : 0,
+        minInstances: capacity.min,
+        maxInstances: capacity.max,
+        desiredInstances: capacity.desired,
         securityGroups: description.securityGroups,
         iamRole: iamRole(description, deployDefaults),
         keyPair: description.keyPair ?: account?.defaultKeyPair,
@@ -313,7 +320,19 @@ class BasicAmazonDeployHandler implements DeployHandler<BasicAmazonDeployDescrip
       description.events << new CreateServerGroupEvent(
         AmazonCloudProvider.ID, account.accountId, region, asgName
       )
+
+      deploymentResult.deployments.add(
+          new DeploymentResult.Deployment(
+              cloudProvider: "aws",
+              account: description.getCredentialAccount(),
+              location: region,
+              serverGroupName: asgName,
+              capacity: capacity
+          )
+      )
     }
+
+    task.updateStatus(BASE_PHASE, "Created the following deployments: ${deploymentResult.deployments}")
 
     return deploymentResult
   }

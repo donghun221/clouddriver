@@ -25,24 +25,22 @@ import com.netflix.spinnaker.clouddriver.kubernetes.security.KubernetesNamedAcco
 import com.netflix.spinnaker.clouddriver.kubernetes.v2.artifact.KubernetesVersionedArtifactConverter
 import com.netflix.spinnaker.clouddriver.kubernetes.v2.description.KubernetesResourcePropertyRegistry
 import com.netflix.spinnaker.clouddriver.kubernetes.v2.description.KubernetesSpinnakerKindMap
-import com.netflix.spinnaker.clouddriver.kubernetes.v2.description.manifest.KubernetesApiVersion
-import com.netflix.spinnaker.clouddriver.kubernetes.v2.description.manifest.KubernetesDeployManifestDescription
-import com.netflix.spinnaker.clouddriver.kubernetes.v2.description.manifest.KubernetesKind
-import com.netflix.spinnaker.clouddriver.kubernetes.v2.description.manifest.KubernetesManifest
-import com.netflix.spinnaker.clouddriver.kubernetes.v2.description.manifest.KubernetesManifestSpinnakerRelationships
+import com.netflix.spinnaker.clouddriver.kubernetes.v2.description.manifest.*
 import com.netflix.spinnaker.clouddriver.kubernetes.v2.names.KubernetesManifestNamer
 import com.netflix.spinnaker.clouddriver.kubernetes.v2.op.handler.KubernetesReplicaSetHandler
+import com.netflix.spinnaker.clouddriver.kubernetes.v2.op.handler.KubernetesServiceHandler
 import com.netflix.spinnaker.clouddriver.kubernetes.v2.op.manifest.KubernetesDeployManifestOperation
 import com.netflix.spinnaker.clouddriver.kubernetes.v2.security.KubernetesV2Credentials
 import com.netflix.spinnaker.clouddriver.names.NamerRegistry
 import com.netflix.spinnaker.kork.artifacts.model.Artifact
 import com.netflix.spinnaker.moniker.Moniker
 import org.yaml.snakeyaml.Yaml
+import org.yaml.snakeyaml.constructor.SafeConstructor
 import spock.lang.Specification
 
 class KubernetesDeployManifestOperationSpec extends Specification {
   def objectMapper = new ObjectMapper()
-  def yaml = new Yaml()
+  def yaml = new Yaml(new SafeConstructor())
 
   def ACCOUNT = "account"
   def NAME = "my-name"
@@ -51,6 +49,7 @@ class KubernetesDeployManifestOperationSpec extends Specification {
   def DEFAULT_NAMESPACE = "default"
   def IMAGE = "gcr.io/project/image"
   def KIND = KubernetesKind.REPLICA_SET
+  def SERVICE = KubernetesKind.SERVICE
   def API_VERSION = KubernetesApiVersion.EXTENSIONS_V1BETA1
 
   def BASIC_REPLICA_SET = """
@@ -68,6 +67,17 @@ metadata:
   name: $NAME
 """
 
+  def MY_SERVICE = """
+apiVersion: v1
+kind: $SERVICE
+metadata:
+  name: $NAME
+  namespace: $NAMESPACE
+spec:
+  selector:
+    selector-key: selector-value
+"""
+
   def setupSpec() {
     TaskRepository.threadLocalTask.set(Mock(Task))
   }
@@ -76,13 +86,17 @@ metadata:
     return objectMapper.convertValue(yaml.load(input), KubernetesManifest)
   }
 
-  KubernetesDeployManifestOperation createMockDeployer(KubernetesV2Credentials credentials, String manifest) {
-    def deployDescription = new KubernetesDeployManifestDescription()
-      .setManifest(stringToManifest(manifest))
+  KubernetesDeployManifestDescription getBaseDeployDescription(String manifest) {
+    return new KubernetesDeployManifestDescription()
+      .setManifests([stringToManifest(manifest)])
       .setMoniker(new Moniker())
-      .setRelationships(new KubernetesManifestSpinnakerRelationships())
       .setSource(KubernetesDeployManifestDescription.Source.text)
+  }
 
+  KubernetesDeployManifestOperation createMockDeployer(
+    KubernetesV2Credentials credentials,
+    KubernetesDeployManifestDescription deployDescription
+  ) {
     def namedCredentialsMock = Mock(KubernetesNamedAccountCredentials)
     namedCredentialsMock.getCredentials() >> credentials
     namedCredentialsMock.getName() >> ACCOUNT
@@ -93,10 +107,11 @@ metadata:
     def replicaSetDeployer = new KubernetesReplicaSetHandler()
     replicaSetDeployer.versioned() >> true
     replicaSetDeployer.kind() >> KIND
+    def serviceDeployer = new KubernetesServiceHandler()
     def versionedArtifactConverterMock = Mock(KubernetesVersionedArtifactConverter)
     versionedArtifactConverterMock.getDeployedName(_) >> "$NAME-$VERSION"
     versionedArtifactConverterMock.toArtifact(_, _, _) >> new Artifact()
-    def registry = new KubernetesResourcePropertyRegistry(Collections.singletonList(replicaSetDeployer),
+    def registry = new KubernetesResourcePropertyRegistry([replicaSetDeployer, serviceDeployer],
         new KubernetesSpinnakerKindMap())
 
     NamerRegistry.lookup().withProvider(KubernetesCloudProvider.ID)
@@ -114,7 +129,7 @@ metadata:
     setup:
     def credentialsMock = Mock(KubernetesV2Credentials)
     credentialsMock.getDefaultNamespace() >> NAMESPACE
-    def deployOp = createMockDeployer(credentialsMock, BASIC_REPLICA_SET)
+    def deployOp = createMockDeployer(credentialsMock, getBaseDeployDescription(BASIC_REPLICA_SET))
 
     when:
     def result = deployOp.operate([])
@@ -127,7 +142,7 @@ metadata:
     setup:
     def credentialsMock = Mock(KubernetesV2Credentials)
     credentialsMock.getDefaultNamespace() >> DEFAULT_NAMESPACE
-    def deployOp = createMockDeployer(credentialsMock, BASIC_REPLICA_SET_NO_NAMESPACE)
+    def deployOp = createMockDeployer(credentialsMock, getBaseDeployDescription(BASIC_REPLICA_SET_NO_NAMESPACE))
 
     when:
     def result = deployOp.operate([])
@@ -135,5 +150,45 @@ metadata:
     then:
     result.manifestNamesByNamespace[DEFAULT_NAMESPACE].size() == 1
     result.manifestNamesByNamespace[DEFAULT_NAMESPACE][0] == "$KIND $NAME-$VERSION"
+  }
+
+  void "sends traffic to the specified service when enableTraffic is true"() {
+    setup:
+    def credentialsMock = Mock(KubernetesV2Credentials)
+    credentialsMock.getDefaultNamespace() >> NAMESPACE
+    credentialsMock.get(KubernetesKind.SERVICE, NAMESPACE, "my-service") >> stringToManifest(MY_SERVICE)
+    def deployDescription = getBaseDeployDescription(BASIC_REPLICA_SET)
+      .setServices(["service my-service"])
+      .setEnableTraffic(true)
+    def deployOp = createMockDeployer(credentialsMock, deployDescription)
+
+    when:
+    def result = deployOp.operate([])
+    def manifest = result.getManifests().getAt(0)
+    def traffic = KubernetesManifestAnnotater.getTraffic(manifest)
+
+    then:
+    traffic.getLoadBalancers() == ["service my-service"]
+    manifest.getLabels().get("selector-key") == "selector-value"
+  }
+
+  void "does not send traffic to the specified service when enableTraffic is false"() {
+    setup:
+    def credentialsMock = Mock(KubernetesV2Credentials)
+    credentialsMock.getDefaultNamespace() >> NAMESPACE
+    credentialsMock.get(KubernetesKind.SERVICE, NAMESPACE, "my-service") >> stringToManifest(MY_SERVICE)
+    def deployDescription = getBaseDeployDescription(BASIC_REPLICA_SET)
+      .setServices(["service my-service"])
+      .setEnableTraffic(false)
+    def deployOp = createMockDeployer(credentialsMock, deployDescription)
+
+    when:
+    def result = deployOp.operate([])
+    def manifest = result.getManifests().getAt(0)
+    def traffic = KubernetesManifestAnnotater.getTraffic(manifest)
+
+    then:
+    traffic.getLoadBalancers() == ["service my-service"]
+    !manifest.getLabels().containsKey("selector-key")
   }
 }

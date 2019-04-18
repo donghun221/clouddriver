@@ -79,13 +79,38 @@ class EcsCreateServergroupDescriptionValidatorSpec extends AbstractValidatorSpec
     1 * errors.rejectValue('availabilityZones', "${getDescriptionName()}.availabilityZones.must.have.only.one")
   }
 
+  void 'should fail when environment variables contain reserved key'() {
+    given:
+    def description = (CreateServerGroupDescription) getDescription()
+    description.environmentVariables = ['SERVER_GROUP':'invalid', 'tag_1':'valid_tag']
+    def errors = Mock(Errors)
+
+    when:
+    validator.validate([], description, errors)
+
+    then:
+    1 * errors.rejectValue('environmentVariables', "${getDescriptionName()}.environmentVariables.invalid")
+  }
+
+  void 'should pass with correct environment variables'() {
+    given:
+    def description = getDescription()
+    description.environmentVariables = ['TAG_1':'valid_tag_1', 'TAG_2':'valid_tag_2']
+    def errors = Mock(Errors)
+
+    when:
+    validator.validate([], description, errors)
+
+    then:
+    0 * errors.rejectValue(_, _)
+  }
+
 
   @Override
   AbstractECSDescription getNulledDescription() {
     def description = (CreateServerGroupDescription) getDescription()
     description.placementStrategySequence = null
     description.availabilityZones = null
-    description.autoscalingPolicies = null
     description.application = null
     description.ecsClusterName = null
     description.dockerImageAddress = null
@@ -101,7 +126,7 @@ class EcsCreateServergroupDescriptionValidatorSpec extends AbstractValidatorSpec
 
   @Override
   Set<String> notNullableProperties() {
-    ['placementStrategySequence', 'availabilityZones', 'autoscalingPolicies', 'application',
+    ['placementStrategySequence', 'availabilityZones', 'application',
      'ecsClusterName', 'dockerImageAddress', 'credentials', 'containerPort', 'computeUnits',
      'reservedMemory', 'capacity.desired', 'capacity.min', 'capacity.max']
   }
@@ -151,14 +176,13 @@ class EcsCreateServergroupDescriptionValidatorSpec extends AbstractValidatorSpec
     description.iamRole = 'iam-role-arn'
     description.containerPort = 1337
     description.targetGroup = 'target-group-arn'
-    description.securityGroups = ['sg-deadbeef']
+    description.securityGroupNames = ['sg-deadbeef']
     description.portProtocol = 'tcp'
     description.computeUnits = 256
     description.reservedMemory = 512
     description.dockerImageAddress = 'docker-image-url'
     description.capacity = new ServerGroup.Capacity(1, 2, 1)
     description.availabilityZones = ['us-west-1': ['us-west-1a']]
-    description.autoscalingPolicies = []
     description.placementStrategySequence = [new PlacementStrategy().withType(PlacementStrategyType.Random)]
 
     description

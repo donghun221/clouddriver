@@ -47,7 +47,7 @@ public class GcsStorageService {
     void visit(StorageObject storageObj) throws IOException;
   };
 
-  static class Factory {
+  public static class Factory {
     private String applicationName_;
     private HttpTransport transport_;
     private JsonFactory jsonFactory_;
@@ -75,7 +75,7 @@ public class GcsStorageService {
 
     private GoogleCredential loadCredential(String credentialsPath) throws IOException {
       GoogleCredential credential;
-      if (!credentialsPath.isEmpty()) {
+      if (credentialsPath != null && !credentialsPath.isEmpty()) {
         FileInputStream stream = new FileInputStream(credentialsPath);
         credential = GoogleCredential.fromStream(stream, transport_, jsonFactory_)
           .createScoped(Collections.singleton(StorageScopes.DEVSTORAGE_READ_ONLY));

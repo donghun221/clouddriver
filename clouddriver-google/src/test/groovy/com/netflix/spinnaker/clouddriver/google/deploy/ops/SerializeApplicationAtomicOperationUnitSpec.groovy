@@ -17,6 +17,7 @@
 package com.netflix.spinnaker.clouddriver.google.deploy.ops
 
 import com.google.api.services.compute.model.*
+import com.netflix.spinnaker.clouddriver.google.deploy.GCEUtil
 import com.netflix.spinnaker.clouddriver.google.deploy.description.snapshot.SaveSnapshotDescription
 import com.netflix.spinnaker.clouddriver.google.deploy.exception.GoogleResourceIllegalStateException
 import com.netflix.spinnaker.clouddriver.google.deploy.ops.snapshot.SaveSnapshotAtomicOperation
@@ -47,6 +48,10 @@ class SerializeApplicationAtomicOperationUnitSpec extends Specification {
   private static final SCHEDULING_ON_HOST_MAINTENANCE = "MIGRATE"
   private static final SCHEDULING_PREEMPTIBLE = false
 
+  private static final SHIELDEDVMCONFIG_ENABLE_SECURE_BOOT = false
+  private static final SHIELDEDVMCONFIG_ENABLE_VTPM = false
+  private static final SHIELDEDVMCONFIG_ENABLE_INTEGRITY_MONITORING = false
+
   private static final DISK_AUTO_DELETE = true
   private static final DISK_BOOT = false
   private static final DISK_DEVICE_NAME = "test_device_name"
@@ -59,8 +64,8 @@ class SerializeApplicationAtomicOperationUnitSpec extends Specification {
   private static final DISK_SIZE_GB = 100
   private static final DISK_SOURCE = "https://pantheon.corp.google.com/compute/disksDetail/zones/us-central1-f/disks/spinnaker-test-disk"
 
-  private static final NETWORK_URL = "https://www.googleapis.com/compute/v1/projects/test-proj/networking/networks/details/default"
-  private static final SUBNETWORK_URL = "https://www.googleapis.com/compute/v1/projects/test-proj/networking/subnetworks/details/us-central1/default"
+  private static final NETWORK_URL = "https://compute.googleapis.com/compute/v1/projects/test-proj/networking/networks/details/default"
+  private static final SUBNETWORK_URL = "https://compute.googleapis.com/compute/v1/projects/test-proj/networking/subnetworks/details/us-central1/default"
   private static final NETWORK_ACCESS_CONFIG = []
 
   private static final AUTOSCALING_MAX_NUM_REPLICAS = 6
@@ -76,7 +81,7 @@ class SerializeApplicationAtomicOperationUnitSpec extends Specification {
   private static final LOAD_BALANCER_IP_PROTOCOL = "TCP"
   private static final LOAD_BALANCER_PORT_RANGE = "8080-8080"
   private static final LOAD_BALANCER_REGION = "us-east1"
-  private static final LOAD_BALANCER_TARGET_POOL = "https://www.googleapis.com/compute/v1/projects/test-proj/regions/us-central1/targetPools/spinnaker-load_balancer-tp"
+  private static final LOAD_BALANCER_TARGET_POOL = "https://compute.googleapis.com/compute/v1/projects/test-proj/regions/us-central1/targetPools/spinnaker-load_balancer-tp"
 
   private static final HEALTH_CHECK_NAME = "spinnaker-load-balancer-hc"
   private static final HEALTH_CHECK_INTERVAL = 15
@@ -100,6 +105,9 @@ class SerializeApplicationAtomicOperationUnitSpec extends Specification {
       def scheduling = new Scheduling(automaticRestart: SCHEDULING_AUTOMATIC_RESTART,
                                       onHostMaintenance: SCHEDULING_ON_HOST_MAINTENANCE,
                                       preemptible: SCHEDULING_PREEMPTIBLE)
+      def shieldedVmConfig = new ShieldedVmConfig(enableSecureBoot: SHIELDEDVMCONFIG_ENABLE_SECURE_BOOT,
+                                                  enableVtpm: SHIELDEDVMCONFIG_ENABLE_VTPM,
+                                                  enableIntegrityMonitoring: SHIELDEDVMCONFIG_ENABLE_INTEGRITY_MONITORING)
       def disk = new AttachedDisk(autoDelete: DISK_AUTO_DELETE,
                                   boot: DISK_BOOT,
                                   deviceName: DISK_DEVICE_NAME,
@@ -121,7 +129,8 @@ class SerializeApplicationAtomicOperationUnitSpec extends Specification {
                                                       metadata: INSTANCE_TEMPLATE_METADATA,
                                                       scheduling: scheduling,
                                                       disks: [disk],
-                                                      networkInterfaces: [networkInterface])
+                                                      networkInterfaces: [networkInterface],
+                                                      shieldedVmConfig: shieldedVmConfig)
       def instanceTemplate = new InstanceTemplate(description: INSTANCE_TEMPLATE_DESCRIPTION,
                                                   name: INSTANCE_TEMPLATE_NAME,
                                                   properties: instanceProperties)
@@ -135,7 +144,7 @@ class SerializeApplicationAtomicOperationUnitSpec extends Specification {
                                                                                                                             utilizationTargetType: AUTOSCALING_METRIC_TYPE)])
       def serverGroup = new GoogleServerGroup(name: SERVER_GROUP_NAME,
                                               zone: SERVER_GROUP_ZONE,
-                                              asg: [(GoogleServerGroup.View.REGIONAL_LOAD_BALANCER_NAMES): SERVER_GROUP_LOAD_BALANCERS],
+                                              asg: [(GCEUtil.REGIONAL_LOAD_BALANCER_NAMES): SERVER_GROUP_LOAD_BALANCERS],
                                               launchConfig: ["instanceTemplate": instanceTemplate],
                                               autoscalingPolicy: autoscalingPolicy)
 
@@ -158,6 +167,9 @@ class SerializeApplicationAtomicOperationUnitSpec extends Specification {
       def schedulingMap = [automatic_restart: SCHEDULING_AUTOMATIC_RESTART,
                            on_host_maintenance: SCHEDULING_ON_HOST_MAINTENANCE,
                            preemptible: SCHEDULING_PREEMPTIBLE]
+      def shieldedVmConfigMap = [enable_secure_boot: SHIELDEDVMCONFIG_ENABLE_SECURE_BOOT,
+                                  enable_vtpm: SHIELDEDVMCONFIG_ENABLE_VTPM,
+                                  enable_integrity_monitoring: SHIELDEDVMCONFIG_ENABLE_INTEGRITY_MONITORING]
       def autoscalingPolicyMap = [max_replicas: AUTOSCALING_MAX_NUM_REPLICAS,
                                   min_replicas: AUTOSCALING_MIN_NUM_REPLICAS,
                                   cooldown_period: AUTOSCALING_COOL_DOWN_PERIOD,
@@ -185,7 +197,8 @@ class SerializeApplicationAtomicOperationUnitSpec extends Specification {
                                  project: null,
                                  network_interface: [networkInterfaceMap],
                                  scheduling: schedulingMap,
-                                 metadata: metadataMap]
+                                 metadata: metadataMap,
+                                 shielded_vm_config: shieldedVmConfigMap]
       def targetPools = []
       SERVER_GROUP_LOAD_BALANCERS.each {String loadBalancer ->
         targetPools.add("\${google_compute_target_pool.${loadBalancer}.self_link}")
@@ -294,7 +307,7 @@ class SerializeApplicationAtomicOperationUnitSpec extends Specification {
       // Create a server group with no instance template
       def serverGroup = new GoogleServerGroup(name: SERVER_GROUP_NAME,
         zone: SERVER_GROUP_ZONE,
-        asg: [(GoogleServerGroup.View.REGIONAL_LOAD_BALANCER_NAMES): SERVER_GROUP_LOAD_BALANCERS],
+        asg: [(GCEUtil.REGIONAL_LOAD_BALANCER_NAMES): SERVER_GROUP_LOAD_BALANCERS],
         launchConfig: ["instanceTemplate": null])
       @Subject def operation = new SaveSnapshotAtomicOperation(new SaveSnapshotDescription())
 
